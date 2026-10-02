@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jevretrieve"
+version = "0.1.0"
+description = "Adaptive evidence retrieval on top of any base retriever, powered by Jev."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "JevRetrieve Contributors"}
+]
+license = {text = "MIT"}
+dependencies = [
+    "requests>=2.31.0,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/"
+Repository = "https://github.com/"
+
+[tool.setuptools.packages.find]
+where = ["src"]
