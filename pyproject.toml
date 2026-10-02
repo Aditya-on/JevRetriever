@@ -17,8 +17,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/"
-Repository = "https://github.com/"
+Homepage = "https://github.com/Aditya-on/JevRetriever"
+Repository = "https://github.com/Aditya-on/JevRetriever"
 
 [tool.setuptools.packages.find]
 where = ["src"]

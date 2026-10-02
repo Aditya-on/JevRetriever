@@ -1,4 +1,4 @@
-"""Adaptive stopping and action selection."""
+"""Jev retrieval controller."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from .models import EvidenceAssessment, RetrievalAction
 
 
 class RetrievalController:
-    """Simple deterministic policy driven by Jev's evidence assessment."""
+    """Decide whether retrieval should stop or continue."""
 
     def __init__(
         self,
@@ -14,6 +14,16 @@ class RetrievalController:
         sufficiency_threshold: float = 0.85,
         coverage_threshold: float = 0.85,
     ) -> None:
+        if not 0.0 <= sufficiency_threshold <= 1.0:
+            raise ValueError(
+                "sufficiency_threshold must be between 0 and 1."
+            )
+
+        if not 0.0 <= coverage_threshold <= 1.0:
+            raise ValueError(
+                "coverage_threshold must be between 0 and 1."
+            )
+
         self.sufficiency_threshold = sufficiency_threshold
         self.coverage_threshold = coverage_threshold
 
@@ -25,16 +35,9 @@ class RetrievalController:
         retrieval_number: int,
         max_retrievals: int,
     ) -> tuple[RetrievalAction, str, str]:
-        if (
-            assessment.sufficiency >= self.sufficiency_threshold
-            and assessment.coverage >= self.coverage_threshold
-        ):
-            return (
-                RetrievalAction.STOP,
-                "Evidence is sufficiently complete.",
-                current_query,
-            )
+        """Return the next retrieval action."""
 
+        # The hard ceiling always wins.
         if retrieval_number >= max_retrievals:
             return (
                 RetrievalAction.STOP,
@@ -42,16 +45,74 @@ class RetrievalController:
                 current_query,
             )
 
-        next_query = assessment.next_query or current_query
+        # If Jev identified missing information, continue with a
+        # targeted query.
+        if (
+            assessment.missing_information
+            and assessment.missing_information != "NONE"
+        ):
+            next_query = (
+                assessment.next_query
+                or current_query
+            )
 
-        if assessment.next_query and next_query.strip() != current_query.strip():
-            action = RetrievalAction.QUERY_EXPAND
-            reason = "Evidence is insufficient; Jev supplied a better next query."
-        elif assessment.redundancy >= 0.65:
-            action = RetrievalAction.DIVERSIFY
-            reason = "Evidence is insufficient and highly redundant; diversify the search."
-        else:
-            action = RetrievalAction.RETRIEVE_MORE
-            reason = "Evidence is insufficient; retrieve more evidence."
+            return (
+                RetrievalAction.QUERY_EXPAND,
+                (
+                    "Important information is still missing: "
+                    f"{assessment.missing_information}."
+                ),
+                next_query,
+            )
 
-        return action, reason, next_query
+        # If the evidence is highly redundant, explicitly classify
+        # the next retrieval as DIVERSIFY.
+        #
+        # DIVERSIFY does not claim that the underlying retriever
+        # performs a specific diversification algorithm. It means
+        # that Jev has determined another retrieval should seek
+        # different evidence, using the supplied follow-up query
+        # when available.
+        if assessment.redundancy >= 0.65:
+            next_query = (
+                assessment.next_query
+                or current_query
+            )
+
+            return (
+                RetrievalAction.DIVERSIFY,
+                "Current evidence is substantially redundant.",
+                next_query,
+            )
+
+        # If Jev explicitly supplied a different follow-up query,
+        # classify the next retrieval as query expansion.
+        if (
+            assessment.next_query
+            and assessment.next_query != current_query
+        ):
+            return (
+                RetrievalAction.QUERY_EXPAND,
+                "Jev supplied a more specific follow-up query.",
+                assessment.next_query,
+            )
+
+        # Stop only when the evidence is sufficiently complete.
+        if (
+            assessment.sufficiency
+            >= self.sufficiency_threshold
+            and assessment.coverage
+            >= self.coverage_threshold
+        ):
+            return (
+                RetrievalAction.STOP,
+                "Evidence is sufficient and complete enough.",
+                current_query,
+            )
+
+        # Otherwise retrieve more evidence using the current query.
+        return (
+            RetrievalAction.RETRIEVE_MORE,
+            "Current evidence is not yet sufficient.",
+            current_query,
+        )
