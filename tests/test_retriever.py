@@ -51,9 +51,6 @@ class FakeJevClient:
                 "missing_information": {
                     "choice": assessment.missing_information,
                 },
-                "next_query": {
-                    "text": assessment.next_query,
-                },
             },
             "usage": {
                 "input_tokens": 10,
@@ -89,6 +86,7 @@ def make_retriever(
     assessments: list[EvidenceAssessment],
     *,
     max_retrievals: int = 3,
+    top_k: int = 5,
 ) -> tuple[JevRetriever, FakeBaseRetriever, FakeJevClient]:
     base = FakeBaseRetriever()
     client = FakeJevClient(assessments)
@@ -96,6 +94,7 @@ def make_retriever(
     retriever = JevRetriever(
         base,
         max_retrievals=max_retrievals,
+        top_k=top_k,
         jev_client=client,
     )
 
@@ -122,9 +121,92 @@ def test_sufficient_evidence_stops():
 
     assert len(result.decisions) == 1
     assert result.decisions[0].action.value == "STOP"
+    assert (
+        result.decisions[0].reason
+        == "Evidence is sufficient and complete enough."
+    )
+
+    assert base.calls == [
+        ("original question", 5),
+    ]
+
+    assert len(client.states) == 1
+
+
+def test_insufficient_evidence_retrieves_again_with_same_query():
+    retriever, base, client = make_retriever(
+        [
+            EvidenceAssessment(
+                sufficiency=0.4,
+                coverage=0.4,
+                relevance=0.7,
+                redundancy=0.1,
+                missing_information="NONE",
+            ),
+            EvidenceAssessment(
+                sufficiency=0.95,
+                coverage=0.95,
+                relevance=0.95,
+                redundancy=0.1,
+                missing_information="NONE",
+            ),
+        ]
+    )
+
+    result = retriever.retrieve("original question")
+
+    assert result.retrieval_calls == 2
+    assert result.jev_calls == 2
+
+    assert base.calls == [
+        ("original question", 5),
+        ("original question", 10),
+    ]
+
+    assert client.states[0]["query"] == (
+        "original question"
+    )
+    assert client.states[1]["query"] == (
+        "original question"
+    )
+
+    assert result.query == "original question"
+
+    assert result.decisions[0].action.value == (
+        "RETRIEVE_MORE"
+    )
+    assert result.decisions[1].action.value == "STOP"
+
+
+def test_redundant_evidence_stops():
+    retriever, base, client = make_retriever(
+        [
+            EvidenceAssessment(
+                sufficiency=0.4,
+                coverage=0.4,
+                relevance=0.7,
+                redundancy=0.9,
+                missing_information="NONE",
+            )
+        ]
+    )
+
+    result = retriever.retrieve("original question")
+
+    assert result.retrieval_calls == 1
+    assert result.jev_calls == 1
 
     assert len(base.calls) == 1
     assert len(client.states) == 1
+
+    assert result.decisions[0].action.value == "STOP"
+    assert (
+        result.decisions[0].reason
+        == (
+            "Evidence is substantially redundant. "
+            "No further retrieval is needed."
+        )
+    )
 
 
 def test_hard_limit_is_respected():
@@ -160,7 +242,12 @@ def test_hard_limit_is_respected():
     assert result.retrieval_calls == 3
     assert result.jev_calls == 3
 
-    assert len(base.calls) == 3
+    assert base.calls == [
+        ("original question", 5),
+        ("original question", 10),
+        ("original question", 15),
+    ]
+
     assert len(client.states) == 3
 
     assert result.decisions[-1].action.value == "STOP"
@@ -170,74 +257,8 @@ def test_hard_limit_is_respected():
     )
 
 
-def test_jev_can_change_query():
-    retriever, base, _ = make_retriever(
-        [
-            EvidenceAssessment(
-                sufficiency=0.4,
-                coverage=0.4,
-                relevance=0.7,
-                redundancy=0.1,
-                missing_information="NONE",
-                next_query="find the missing evidence",
-            ),
-            EvidenceAssessment(
-                sufficiency=0.95,
-                coverage=0.95,
-                relevance=0.95,
-                redundancy=0.1,
-                missing_information="NONE",
-            ),
-        ]
-    )
-
-    result = retriever.retrieve("original question")
-
-    assert result.retrieval_calls == 2
-    assert result.jev_calls == 2
-
-    assert base.calls[0][0] == "original question"
-    assert base.calls[1][0] == "find the missing evidence"
-
-    assert result.decisions[0].action.value == "QUERY_EXPAND"
-    assert result.decisions[1].action.value == "STOP"
-
-
-def test_missing_information_prevents_early_stop():
-    retriever, base, _ = make_retriever(
-        [
-            EvidenceAssessment(
-                sufficiency=0.95,
-                coverage=0.95,
-                relevance=0.95,
-                redundancy=0.1,
-                missing_information="CAUSE",
-                next_query="find the missing cause",
-            ),
-            EvidenceAssessment(
-                sufficiency=0.95,
-                coverage=0.95,
-                relevance=0.95,
-                redundancy=0.1,
-                missing_information="NONE",
-            ),
-        ]
-    )
-
-    result = retriever.retrieve("what caused the incident?")
-
-    assert result.retrieval_calls == 2
-    assert result.jev_calls == 2
-
-    assert base.calls[0][0] == "what caused the incident?"
-    assert base.calls[1][0] == "find the missing cause"
-
-    assert result.decisions[0].action.value == "QUERY_EXPAND"
-    assert result.decisions[1].action.value == "STOP"
-
-
 def test_original_query_is_preserved_for_jev():
-    retriever, _, client = make_retriever(
+    retriever, base, client = make_retriever(
         [
             EvidenceAssessment(
                 sufficiency=0.4,
@@ -245,7 +266,6 @@ def test_original_query_is_preserved_for_jev():
                 relevance=0.7,
                 redundancy=0.1,
                 missing_information="CAUSE",
-                next_query="find the missing cause",
             ),
             EvidenceAssessment(
                 sufficiency=0.95,
@@ -258,14 +278,22 @@ def test_original_query_is_preserved_for_jev():
     )
 
     result = retriever.retrieve("original question")
-
-    assert result.retrieval_calls == 2
-    assert result.jev_calls == 2
-
-    assert client.states[0]["query"] == "original question"
-    assert client.states[1]["query"] == "original question"
 
     assert result.query == "original question"
+
+    assert base.calls[0][0] == (
+        "original question"
+    )
+    assert base.calls[1][0] == (
+        "original question"
+    )
+
+    assert client.states[0]["query"] == (
+        "original question"
+    )
+    assert client.states[1]["query"] == (
+        "original question"
+    )
 
 
 def test_documents_are_deduplicated():
@@ -313,7 +341,9 @@ def test_documents_are_deduplicated():
         jev_client=client,
     )
 
-    result = retriever.retrieve("original question")
+    result = retriever.retrieve(
+        "original question"
+    )
 
     document_ids = [
         document.document_id
@@ -328,54 +358,18 @@ def test_documents_are_deduplicated():
         "unique-doc",
     ]
 
-
-def test_empty_query_is_rejected():
-    base = FakeBaseRetriever()
-    client = FakeJevClient([])
-
-    retriever = JevRetriever(
-        base,
-        jev_client=client,
-    )
-
-    with pytest.raises(ValueError, match="query must not be empty"):
-        retriever.retrieve("")
+    assert len(result.documents) == 2
 
 
-def test_invalid_max_retrievals_is_rejected():
-    base = FakeBaseRetriever()
-    client = FakeJevClient([])
-
-    with pytest.raises(ValueError, match="max_retrievals"):
-        JevRetriever(
-            base,
-            max_retrievals=0,
-            jev_client=client,
-        )
-
-
-def test_invalid_top_k_is_rejected():
-    base = FakeBaseRetriever()
-    client = FakeJevClient([])
-
-    with pytest.raises(ValueError, match="top_k"):
-        JevRetriever(
-            base,
-            top_k=0,
-            jev_client=client,
-        )
-
-
-def test_diversify_triggers_another_retrieval():
-    retriever, base, _ = make_retriever(
+def test_jev_receives_accumulated_evidence():
+    retriever, _, client = make_retriever(
         [
             EvidenceAssessment(
-                sufficiency=0.4,
-                coverage=0.4,
-                relevance=0.7,
-                redundancy=0.9,
-                missing_information="NONE",
-                next_query="find different evidence",
+                sufficiency=0.2,
+                coverage=0.2,
+                relevance=0.5,
+                redundancy=0.1,
+                missing_information="ADDITIONAL_FACT",
             ),
             EvidenceAssessment(
                 sufficiency=0.95,
@@ -387,13 +381,65 @@ def test_diversify_triggers_another_retrieval():
         ]
     )
 
-    result = retriever.retrieve("original question")
+    retriever.retrieve("original question")
 
-    assert result.retrieval_calls == 2
-    assert result.jev_calls == 2
+    first_evidence = (
+        client.states[0]["retrieved_evidence"]
+    )
+    second_evidence = (
+        client.states[1]["retrieved_evidence"]
+    )
 
-    assert result.decisions[0].action.value == "DIVERSIFY"
-    assert base.calls[0][0] == "original question"
-    assert base.calls[1][0] == "find different evidence"
+    assert len(first_evidence) == 5
+    assert len(second_evidence) == 10
 
-    assert result.decisions[1].action.value == "STOP"
+    assert (
+        second_evidence[:5]
+        == first_evidence
+    )
+
+
+def test_empty_query_is_rejected():
+    base = FakeBaseRetriever()
+    client = FakeJevClient([])
+
+    retriever = JevRetriever(
+        base,
+        jev_client=client,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="query must not be empty",
+    ):
+        retriever.retrieve("")
+
+
+def test_invalid_max_retrievals_is_rejected():
+    base = FakeBaseRetriever()
+    client = FakeJevClient([])
+
+    with pytest.raises(
+        ValueError,
+        match="max_retrievals",
+    ):
+        JevRetriever(
+            base,
+            max_retrievals=0,
+            jev_client=client,
+        )
+
+
+def test_invalid_top_k_is_rejected():
+    base = FakeBaseRetriever()
+    client = FakeJevClient([])
+
+    with pytest.raises(
+        ValueError,
+        match="top_k",
+    ):
+        JevRetriever(
+            base,
+            top_k=0,
+            jev_client=client,
+        )

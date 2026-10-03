@@ -128,18 +128,6 @@ class EvidenceEvaluator:
             "missing_information",
         )
 
-        # Some test doubles provide the next query directly.
-        next_query = _text(
-            answers,
-            "next_query",
-        )
-
-        if not next_query:
-            next_query = _build_next_query(
-                query,
-                missing_information,
-            )
-
         assessment = EvidenceAssessment(
             sufficiency=_score(
                 answers,
@@ -158,7 +146,6 @@ class EvidenceEvaluator:
                 "redundancy",
             ),
             missing_information=missing_information,
-            next_query=next_query,
             raw=raw,
         )
 
@@ -215,19 +202,11 @@ def _score(
     answers: dict[str, Any],
     name: str,
 ) -> float:
-    """Return a normalized 0-1 score.
-
-    TypeSafe's current ``score`` response is already on a 0-1 scale,
-    even though its legend describes the five-point semantic scale
-    using 0, 0.25, 0.5, 0.75, and 1.0.
-
-    Test doubles may use ``number`` values directly on the 0-1 scale.
-    """
+    """Return a normalized 0-1 score."""
 
     value = answers.get(name)
 
     if isinstance(value, dict):
-        # Real TypeSafe response.
         if "score" in value:
             try:
                 return max(
@@ -240,7 +219,6 @@ def _score(
             except (TypeError, ValueError):
                 return 0.0
 
-        # Test-double response.
         if "number" in value:
             try:
                 return max(
@@ -279,70 +257,3 @@ def _choice(
     return str(
         value or "NONE"
     ).upper()
-
-
-def _text(
-    answers: dict[str, Any],
-    name: str,
-) -> str | None:
-    """Extract optional text from an answer."""
-
-    value = _answer(
-        answers,
-        name,
-    )
-
-    if value is None:
-        return None
-
-    text = str(value).strip()
-
-    return text or None
-
-
-def _build_next_query(
-    query: str,
-    missing_information: str,
-) -> str | None:
-    """Build a deterministic follow-up query.
-
-    The query is based on the current query exactly once. The retriever
-    should pass the resulting query to the base retriever on the next
-    iteration rather than recursively expanding it.
-    """
-
-    if missing_information == "NONE":
-        return None
-
-    prompts = {
-        "ENTITY": (
-            "Find the missing entity or person relevant to"
-        ),
-        "RELATIONSHIP": (
-            "Find the missing relationship between entities relevant to"
-        ),
-        "DATE": (
-            "Find the missing date or time relevant to"
-        ),
-        "LOCATION": (
-            "Find the missing location relevant to"
-        ),
-        "CAUSE": (
-            "Find the missing cause or explanation relevant to"
-        ),
-        "COMPARISON": (
-            "Find information needed to compare"
-        ),
-        "ADDITIONAL_FACT": (
-            "Find additional important facts relevant to"
-        ),
-    }
-
-    prefix = prompts.get(
-        missing_information
-    )
-
-    if prefix is None:
-        return query
-
-    return f"{prefix}: {query}"

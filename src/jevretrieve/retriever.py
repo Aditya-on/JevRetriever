@@ -16,7 +16,7 @@ from .models import (
 
 
 class BaseRetriever(Protocol):
-    """Minimal contract for a developer's existing retriever."""
+    """Minimal contract for an existing developer retriever."""
 
     def retrieve(
         self,
@@ -29,12 +29,14 @@ class BaseRetriever(Protocol):
 class JevRetriever:
     """Adaptive evidence retrieval around any base retriever.
 
-    The developer supplies a base retriever and a hard maximum number
-    of retrieval calls.
+    The base retriever finds evidence.
+    Jev evaluates the accumulated evidence and decides whether
+    another retrieval is needed.
 
-    The original user query remains the question Jev evaluates.
-    Jev may produce a follow-up query, which is used only for the
-    next retrieval call.
+    Retrieval continues with the same query until:
+    - the evidence is sufficient,
+    - the evidence becomes substantially redundant, or
+    - the maximum retrieval limit is reached.
     """
 
     def __init__(
@@ -47,6 +49,7 @@ class JevRetriever:
         jev_model: str = "jev-latest",
         sufficiency_threshold: float = 0.85,
         coverage_threshold: float = 0.85,
+        redundancy_threshold: float = 0.65,
         jev_client: JevClient | None = None,
     ) -> None:
         if max_retrievals < 1:
@@ -73,6 +76,7 @@ class JevRetriever:
         self.controller = RetrievalController(
             sufficiency_threshold=sufficiency_threshold,
             coverage_threshold=coverage_threshold,
+            redundancy_threshold=redundancy_threshold,
         )
 
     def retrieve(self, query: str) -> RetrievalResult:
@@ -82,13 +86,6 @@ class JevRetriever:
             raise ValueError(
                 "query must not be empty."
             )
-
-        # Keep the user's original question fixed.
-        original_query = query
-
-        # This query may change after each Jev decision and is used
-        # only when calling the developer's base retriever.
-        current_query = query
 
         all_documents: list[RetrievedDocument] = []
         seen_ids: set[str] = set()
@@ -107,15 +104,14 @@ class JevRetriever:
             1,
             self.max_retrievals + 1,
         ):
-            # ---------------------------------------------------------
-            # Retrieve using the current retrieval query.
-            # ---------------------------------------------------------
             retrieval_calls += 1
 
+            # Increase retrieval depth on each pass so the
+            # base retriever can expose additional evidence.
             batch_size = self.top_k * retrieval_number
 
             new_documents = self.base_retriever.retrieve(
-                current_query,
+                query,
                 top_k=batch_size,
             )
 
@@ -133,23 +129,15 @@ class JevRetriever:
                     seen_ids.add(document_id)
                     all_documents.append(document)
 
-            # ---------------------------------------------------------
-            # IMPORTANT:
-            #
-            # Jev always evaluates the ORIGINAL user question against
-            # the accumulated evidence.
-            #
-            # current_query is NOT passed here.
-            # ---------------------------------------------------------
-
-            # 🔴✓ API CALL — TypeSafe Jev
+            # Jev always evaluates the original user question
+            # against all accumulated evidence.
             (
                 assessment,
                 in_tokens,
                 out_tokens,
                 _raw,
             ) = self.evaluator.evaluate(
-                original_query,
+                query,
                 all_documents,
             )
 
@@ -158,17 +146,8 @@ class JevRetriever:
             input_tokens += in_tokens
             output_tokens += out_tokens
 
-            # ---------------------------------------------------------
-            # Let the controller decide whether to stop or retrieve
-            # again.
-            #
-            # current_query is used here because the next retrieval
-            # may need a more specific query suggested by Jev.
-            # ---------------------------------------------------------
-
-            action, reason, next_query = self.controller.decide(
+            action, reason = self.controller.decide(
                 assessment,
-                current_query=current_query,
                 retrieval_number=retrieval_number,
                 max_retrievals=self.max_retrievals,
             )
@@ -177,7 +156,7 @@ class JevRetriever:
                 ControllerDecision(
                     action=action,
                     reason=reason,
-                    query=current_query,
+                    query=query,
                     retrieval_number=retrieval_number,
                 )
             )
@@ -185,13 +164,10 @@ class JevRetriever:
             if action is RetrievalAction.STOP:
                 break
 
-            # Use Jev's follow-up query only for the next retrieval.
-            current_query = next_query
-
         assert assessment is not None
 
         return RetrievalResult(
-            query=original_query,
+            query=query,
             documents=all_documents,
             assessment=assessment,
             decisions=decisions,

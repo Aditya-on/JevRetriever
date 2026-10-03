@@ -22,8 +22,6 @@ class RetrievalAction(str, Enum):
 
     STOP = "STOP"
     RETRIEVE_MORE = "RETRIEVE_MORE"
-    QUERY_EXPAND = "QUERY_EXPAND"
-    DIVERSIFY = "DIVERSIFY"
 
 
 @dataclass
@@ -35,7 +33,6 @@ class EvidenceAssessment:
     relevance: float
     redundancy: float
     missing_information: str = "NONE"
-    next_query: str | None = None
     raw: dict[str, Any] | None = None
 
 
