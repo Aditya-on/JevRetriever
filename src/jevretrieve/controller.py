@@ -1,3 +1,4 @@
+
 """Jev retrieval controller."""
 
 from __future__ import annotations
@@ -19,12 +20,10 @@ class RetrievalController:
             raise ValueError(
                 "sufficiency_threshold must be between 0 and 1."
             )
-
         if not 0.0 <= coverage_threshold <= 1.0:
             raise ValueError(
                 "coverage_threshold must be between 0 and 1."
             )
-
         if not 0.0 <= redundancy_threshold <= 1.0:
             raise ValueError(
                 "redundancy_threshold must be between 0 and 1."
@@ -43,15 +42,12 @@ class RetrievalController:
     ) -> tuple[RetrievalAction, str]:
         """Return the next retrieval action and reason."""
 
-        # The hard ceiling always wins.
         if retrieval_number >= max_retrievals:
             return (
                 RetrievalAction.STOP,
                 "Maximum retrieval limit reached.",
             )
 
-        # Stop when evidence is substantially redundant.
-        # Additional retrieval is unlikely to add useful information.
         if assessment.redundancy >= self.redundancy_threshold:
             return (
                 RetrievalAction.STOP,
@@ -61,19 +57,28 @@ class RetrievalController:
                 ),
             )
 
-        # Stop when the accumulated evidence is sufficient.
         if (
             assessment.sufficiency
             >= self.sufficiency_threshold
             and assessment.coverage
             >= self.coverage_threshold
+            and assessment.missing_information == "NONE"
         ):
             return (
                 RetrievalAction.STOP,
                 "Evidence is sufficient and complete enough.",
             )
 
-        # Otherwise retrieve more evidence using the same query.
+        if assessment.missing_information != "NONE":
+            return (
+                RetrievalAction.RETRIEVE_MORE,
+                (
+                    "Important information is still missing "
+                    f"({assessment.missing_information}). "
+                    "Retrieving more evidence."
+                ),
+            )
+
         return (
             RetrievalAction.RETRIEVE_MORE,
             "Evidence is not yet sufficient. Retrieving more evidence.",

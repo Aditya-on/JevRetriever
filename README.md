@@ -1,22 +1,53 @@
 # JevRetriever
 
-Adaptive evidence retrieval on top of your existing retriever.
+**Adaptive evidence retrieval for Python, powered by Jev.**
 
-JevRetriever does not replace your search system. You give it any base
-retriever—dense, BM25, hybrid, MMR, similarity search, vector database
-adapter, or your own implementation—and Jev decides whether the accumulated
-evidence is sufficient or whether another retrieval is needed.
+JevRetriever is a reusable retrieval framework that wraps an existing base retriever and uses **TypeSafe Jev** to decide whether the accumulated evidence is sufficient or whether another retrieval pass is useful.
 
-## Install
+## What JevRetriever Does
+
+```text
+User query
+    ↓
+Base retriever
+    ↓
+Jev evaluates accumulated evidence
+    ↓
+Sufficient? ── YES ──→ STOP
+    │
+    NO
+    ↓
+Retrieve again with the same query
+    ↓
+Jev evaluates again
+    ↓
+...
+    ↓
+Maximum retrieval limit
+    ↓
+STOP
+```
+
+Jev evaluates:
+
+- **Sufficiency**
+- **Coverage**
+- **Relevance**
+- **Redundancy**
+- **Missing information**
+
+The base retriever remains responsible for finding documents. Jev acts as the evidence evaluator and retrieval controller.
+
+## Installation
 
 ```bash
 pip install jevretrieve
 ```
 
-For local development:
+Or install the specific release:
 
 ```bash
-pip install -r requirements.txt
+pip install jevretrieve==0.1.3
 ```
 
 ## Quick Start
@@ -26,15 +57,11 @@ from jevretrieve import JevRetriever, RetrievedDocument
 
 
 class MyRetriever:
-    def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-    ) -> list[RetrievedDocument]:
+    def retrieve(self, query: str, top_k: int = 5):
         return [
             RetrievedDocument(
+                text="Your retrieved document text...",
                 document_id="doc-1",
-                text="Your retrieved document text",
                 score=0.91,
             )
         ]
@@ -42,262 +69,130 @@ class MyRetriever:
 
 retriever = JevRetriever(
     base_retriever=MyRetriever(),
-    max_retrievals=10,
-    jev_api_key="YOUR_TYPESAFE_KEY",
+    jev_api_key="YOUR_TYPESAFE_API_KEY",
 )
 
 result = retriever.retrieve(
-    "What caused the incident and who was responsible?"
+    "What caused the incident and when was the change introduced?"
 )
 
 for document in result.documents:
+    print(document.document_id)
     print(document.text)
+
+print(result.assessment.sufficiency)
+print(result.assessment.coverage)
+print(result.retrieval_calls)
+print(result.jev_calls)
 ```
 
-## How It Works
+## API Key
 
-```text
-Your base retriever
-        |
-        v
-     Evidence
-        |
-        v
-    Jev judges
-        |
-   +----+----------------+
-   |                     |
-sufficient?         not sufficient
-   |                     |
-  YES                    |
-   |              more evidence useful?
-  STOP               +---+---+
-                     |       |
-                    NO      YES
-                     |       |
-                    STOP   retrieve again
-                              |
-                              v
-                         Jev judges again
-                              |
-                             ...
-                              |
-                    max retrieval limit
-                              |
-                             STOP
-```
-
-JevRetriever follows a simple adaptive evidence loop:
-
-1. Your base retriever retrieves evidence for the user's query.
-2. Jev evaluates the accumulated evidence.
-3. If the evidence is sufficient, retrieval stops.
-4. If the evidence is substantially redundant, retrieval stops.
-5. Otherwise, JevRetriever calls the same base retriever again using the
-   same original query.
-6. The newly retrieved evidence is added to the accumulated evidence.
-7. Jev evaluates the complete accumulated evidence again.
-8. The process continues until stopping conditions are met or the maximum
-   retrieval limit is reached.
-
-Jev always evaluates the original user question against the accumulated
-evidence.
-
-The base retriever remains responsible for deciding which documents are
-returned. JevRetriever controls the retrieval loop and stopping decision.
-
-## Base Retriever Contract
-
-JevRetriever only requires a retriever with this interface:
+Pass the key directly:
 
 ```python
-class MyRetriever:
-    def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-    ) -> list[RetrievedDocument]:
-        ...
+JevRetriever(
+    base_retriever=my_retriever,
+    jev_api_key="YOUR_TYPESAFE_API_KEY",
+)
 ```
 
-The retriever can use any backend or retrieval strategy.
+Or use the environment variable:
 
-For example:
+```bash
+export TYPESAFE_API_KEY=YOUR_TYPESAFE_API_KEY
+```
 
-- Dense retrieval
-- BM25
-- Hybrid search
-- MMR
-- Vector database search
-- Keyword search
-- Custom retrieval systems
-- Application-specific retrievers
+On Windows:
 
-JevRetriever does not require a specific retrieval framework.
+```powershell
+$env:TYPESAFE_API_KEY="YOUR_TYPESAFE_API_KEY"
+```
 
-## Retrieval Budget
+## Base Retriever Interface
 
-`max_retrievals` is a hard upper bound on calls to your base retriever.
+JevRetriever works with an existing retriever implementing:
 
-The library default is:
+```python
+def retrieve(
+    self,
+    query: str,
+    top_k: int = 5,
+) -> list[RetrievedDocument]:
+    ...
+```
+
+A document can be represented as:
+
+```python
+RetrievedDocument(
+    text="Document content",
+    document_id="unique-document-id",
+    score=0.87,
+    metadata={"source": "example"},
+)
+```
+
+The framework is independent of the underlying retrieval implementation. The base retriever can use dense embeddings, BM25, MMR, similarity search, a vector database, or another retrieval strategy.
+
+## Configuration
+
+```python
+JevRetriever(
+    base_retriever=my_retriever,
+    max_retrievals=10,
+    top_k=5,
+    jev_api_key="YOUR_TYPESAFE_API_KEY",
+    jev_model="jev-latest",
+    sufficiency_threshold=0.85,
+    coverage_threshold=0.85,
+    redundancy_threshold=0.65,
+)
+```
+
+### `max_retrievals`
+
+Maximum number of retrieval iterations allowed.
+
+Default:
 
 ```python
 max_retrievals=10
 ```
 
-For example:
+This is a hard safety limit.
+
+For the benchmark experiments:
 
 ```python
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-    max_retrievals=10,
-    jev_api_key="YOUR_TYPESAFE_KEY",
-)
+max_retrievals=3
 ```
 
-The retriever may stop earlier when:
+This allowed up to three retrieval iterations. In the observed benchmark runs, Jev never required a third iteration; when additional retrieval was triggered, the controller stopped after the second iteration.
 
-- the accumulated evidence is sufficient, or
-- the evidence is substantially redundant.
+### `top_k`
 
-The hard retrieval limit prevents the controller from continuing
-indefinitely.
-
-## Retrieval Depth
-
-The base retriever is called repeatedly with an increasing `top_k` value.
-
-For example, with:
-
-```python
-top_k=5
-```
-
-the retrieval loop uses:
+The initial retrieval size. Later passes request progressively larger batches:
 
 ```text
-retrieval 1 → top_k = 5
-retrieval 2 → top_k = 10
-retrieval 3 → top_k = 15
-...
+pass 1 → top_k × 1
+pass 2 → top_k × 2
+pass 3 → top_k × 3
 ```
 
-This allows compatible base retrievers to expose additional evidence on
-later retrieval passes while keeping the original query unchanged.
+### Thresholds
 
-The exact behavior of repeated retrieval depends on the base retriever.
-
-## Evidence Accumulation
-
-Documents from every retrieval pass are accumulated and evaluated together.
-
-For example:
+Default values:
 
 ```text
-Retrieval 1
-    ↓
-documents A, B, C
-
-Retrieval 2
-    ↓
-documents A, B, C, D, E
-
-Retrieval 3
-    ↓
-documents A, B, C, D, E, F, G
+sufficiency_threshold = 0.85
+coverage_threshold    = 0.85
+redundancy_threshold  = 0.65
 ```
 
-Jev evaluates the complete accumulated evidence rather than evaluating each
-retrieval independently.
+## Retrieval Result
 
-## Deduplication
-
-JevRetriever removes duplicate documents using `document_id`.
-
-This means that if the same document is returned by multiple retrieval
-passes, it appears only once in the final result.
-
-Example:
-
-```python
-RetrievedDocument(
-    document_id="doc-123",
-    text="Example evidence",
-)
-```
-
-The `document_id` should identify the document consistently across retrieval
-calls.
-
-If a document does not provide a `document_id`, JevRetriever assigns an
-internal anonymous identifier for that retrieval result.
-
-## Evidence Assessment
-
-Jev evaluates the accumulated evidence using several dimensions:
-
-- `sufficiency`
-- `coverage`
-- `relevance`
-- `redundancy`
-- `missing_information`
-
-Example:
-
-```python
-result.assessment.sufficiency
-result.assessment.coverage
-result.assessment.relevance
-result.assessment.redundancy
-result.assessment.missing_information
-```
-
-The values for the score-based fields are normalized between `0.0` and
-`1.0`.
-
-## Stopping Behavior
-
-By default, JevRetriever uses the following thresholds:
-
-```python
-sufficiency_threshold=0.85
-coverage_threshold=0.85
-redundancy_threshold=0.65
-```
-
-Evidence is considered sufficient when both:
-
-```text
-sufficiency >= 0.85
-coverage >= 0.85
-```
-
-Retrieval also stops when:
-
-```text
-redundancy >= 0.65
-```
-
-The thresholds can be customized:
-
-```python
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-    max_retrievals=10,
-    sufficiency_threshold=0.90,
-    coverage_threshold=0.90,
-    redundancy_threshold=0.70,
-    jev_api_key="YOUR_TYPESAFE_KEY",
-)
-```
-
-All threshold values must be between `0.0` and `1.0`.
-
-## Result Object
-
-`JevRetriever.retrieve()` returns a `RetrievalResult`.
-
-Available fields include:
+`retrieve()` returns a `RetrievalResult` containing:
 
 ```python
 result.query
@@ -313,387 +208,178 @@ result.total_cost
 result.iterations
 ```
 
-### `query`
-
-The original user query.
-
-### `documents`
-
-All unique documents accumulated during retrieval.
-
-### `assessment`
-
-Jev's final assessment of the accumulated evidence.
-
-### `decisions`
-
-The controller decision made after each retrieval iteration.
-
-Each decision contains:
+The final assessment contains:
 
 ```python
-decision.action
-decision.reason
-decision.query
-decision.retrieval_number
+result.assessment.sufficiency
+result.assessment.coverage
+result.assessment.relevance
+result.assessment.redundancy
+result.assessment.missing_information
 ```
 
-The current controller uses:
+Controller decisions use:
+
+```python
+RetrievalAction.STOP
+RetrievalAction.RETRIEVE_MORE
+```
+
+## Controller Behavior
+
+The controller follows this order:
+
+1. Maximum retrieval limit reached → `STOP`
+2. Evidence is substantially redundant → `STOP`
+3. Evidence is sufficiently complete and no important information is missing → `STOP`
+4. Important information is missing → `RETRIEVE_MORE`
+5. Otherwise → `RETRIEVE_MORE`
+
+## 50-Question Benchmark
+
+JevRetriever was evaluated on a 50-question subset of the **HotpotQA distractor** benchmark using:
+
+- MMR
+- Dense retrieval
+- BM25
+- Similarity search
+
+Each retriever was evaluated with and without Jev using the same benchmark questions and answer-generation setup.
+
+### Answer Accuracy
+
+| Retriever | Baseline | + Jev | Change |
+|---|---:|---:|---:|
+| MMR | 40.00% | 48.00% | +8.00 pp |
+| Dense | 36.00% | 44.00% | +8.00 pp |
+| BM25 | 42.00% | 44.00% | +2.00 pp |
+| Similarity | 34.00% | 44.00% | +10.00 pp |
+
+### Supporting-Document Recall
+
+| Retriever | Baseline | + Jev | Change |
+|---|---:|---:|---:|
+| MMR | 81.47% | 94.67% | +13.20 pp |
+| Dense | 80.17% | 86.83% | +6.66 pp |
+| BM25 | 76.67% | 83.33% | +6.66 pp |
+| Similarity | 80.17% | 86.83% | +6.66 pp |
+
+### Retrieval Expansion
+
+| Retriever | Avg. docs — Baseline | Avg. docs — + Jev | Retrieval calls | Jev calls |
+|---|---:|---:|---:|---:|
+| MMR | 4.94 | 6.34 | 64 | 64 |
+| Dense | 4.94 | 5.64 | 57 | 57 |
+| BM25 | 4.94 | 5.54 | 56 | 56 |
+| Similarity | 4.94 | 5.64 | 57 | 57 |
+
+The benchmark showed increased supporting-document recall for all four retriever types when Jev-controlled adaptive retrieval was enabled.
+
+Better evidence coverage does not automatically produce the same increase in final answer accuracy; answer generation and reasoning remain separate components of the RAG pipeline.
+
+## Benchmark Notes
+
+The benchmark used the HotpotQA **distractor** setting, where each question is evaluated against a fixed candidate context containing supporting and distractor Wikipedia paragraphs.
+
+Therefore, these experiments primarily evaluate **adaptive selection from a fixed candidate pool** rather than open-ended retrieval across the entire Wikipedia corpus.
+
+The supporting-recall metric used in these experiments is **paragraph-title recall**, not sentence-level supporting-fact recall.
+
+## Why Use JevRetriever?
+
+A conventional RAG pipeline often uses:
 
 ```text
-STOP
-RETRIEVE_MORE
+query → retrieve top 5 → answer
 ```
 
-### `retrieval_calls`
-
-Number of calls made to the base retriever.
-
-### `jev_calls`
-
-Number of Jev evaluations performed.
-
-### `input_tokens`
-
-Total Jev input tokens reported by the API.
-
-### `output_tokens`
-
-Total Jev output tokens reported by the API.
-
-### `total_jev_tokens`
-
-Convenience property:
-
-```python
-result.input_tokens + result.output_tokens
-```
-
-### `total_cost`
-
-Total Jev cost when available from the API.
-
-### `iterations`
-
-Number of retrieval iterations performed.
-
-## API Key
-
-JevRetriever uses the TypeSafe Jev API.
-
-You can provide the API key directly:
-
-```python
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-    jev_api_key="YOUR_TYPESAFE_KEY",
-)
-```
-
-Or set the environment variable:
+JevRetriever allows retrieval to respond to evidence quality:
 
 ```text
-TYPESAFE_API_KEY=YOUR_TYPESAFE_KEY
+query
+  ↓
+retrieve
+  ↓
+evaluate evidence
+  ↓
+enough? → answer
+  ↓
+not enough
+  ↓
+retrieve more
+  ↓
+evaluate again
+  ↓
+answer
 ```
 
-Then:
+This can be useful when:
 
-```python
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-)
-```
+- some questions are answerable with a small amount of evidence;
+- other questions require multiple supporting documents;
+- retrieved evidence can be redundant;
+- missing information should trigger additional retrieval;
+- developers want a hard upper bound on retrieval effort.
 
-The environment-variable approach is recommended for applications so that
-API keys do not need to be hard-coded into source files.
-
-## Jev Model
-
-The default Jev model is:
-
-```python
-jev_model="jev-latest"
-```
-
-It can be configured:
-
-```python
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-    jev_model="jev-latest",
-    jev_api_key="YOUR_TYPESAFE_KEY",
-)
-```
-
-## Custom Jev Client
-
-For testing or advanced integrations, a custom `JevClient` can be supplied:
-
-```python
-from jevretrieve import JevRetriever
-
-
-retriever = JevRetriever(
-    base_retriever=my_retriever,
-    jev_client=my_jev_client,
-)
-```
-
-This is useful for:
-
-- Unit testing
-- Integration testing
-- Custom API clients
-- Controlled experiments
-
-## Backend-Agnostic Design
-
-JevRetriever does not assume anything about how your application retrieves
-documents.
-
-Your existing retrieval system remains responsible for:
-
-- indexing
-- embeddings
-- vector search
-- keyword search
-- ranking
-- filtering
-- metadata
-- document storage
-
-JevRetriever adds an adaptive evidence-control layer around that retriever.
-
-```text
-                 Your Application
-                        |
-                        v
-                  JevRetriever
-                   /          \
-                  /            \
-                 v              v
-        Base Retriever      Jev Evaluation
-                 |              |
-                 v              v
-             Evidence      Stop / Continue
-                 \              /
-                  \            /
-                   v          v
-                 Final Evidence
-```
-
-## Example Architecture
-
-A typical application can use JevRetriever like this:
-
-```text
-User Question
-      |
-      v
-JevRetriever
-      |
-      +-----------------------+
-      |                       |
-      v                       v
-Base Retriever          Jev Evaluation
-      |                       |
-      v                       v
-Documents              Evidence Judgment
-      |                       |
-      +-----------+-----------+
-                  |
-                  v
-          Continue / Stop
-                  |
-                  v
-           Final Evidence
-                  |
-                  v
-              LLM Answer
-```
-
-The final answer generation remains outside JevRetriever.
-
-JevRetriever is responsible for gathering and evaluating evidence.
-
-## Example With a Custom Retriever
-
-```python
-from jevretrieve import JevRetriever, RetrievedDocument
-
-
-class MyHybridRetriever:
-    def retrieve(
-        self,
-        query: str,
-        top_k: int = 5,
-    ) -> list[RetrievedDocument]:
-        return [
-            RetrievedDocument(
-                document_id=f"doc-{index}",
-                text=f"Retrieved evidence {index}",
-                score=1.0 / index,
-            )
-            for index in range(1, top_k + 1)
-        ]
-
-
-retriever = JevRetriever(
-    base_retriever=MyHybridRetriever(),
-    max_retrievals=10,
-)
-
-result = retriever.retrieve(
-    "What caused the production incident?"
-)
-
-print("Retrieval calls:", result.retrieval_calls)
-print("Jev calls:", result.jev_calls)
-print("Documents:", len(result.documents))
-
-for decision in result.decisions:
-    print(
-        decision.retrieval_number,
-        decision.action,
-        decision.reason,
-    )
-```
-
-## Example Output
-
-A result can look conceptually like:
-
-```text
-Retrieval calls: 2
-Jev calls: 2
-Documents: 8
-
-1 RETRIEVE_MORE Evidence is not yet sufficient. Retrieving more evidence.
-2 STOP Evidence is sufficient and complete enough.
-```
-
-The exact result depends on the base retriever and Jev's evaluation.
-
-## Current MVP Scope
-
-JevRetriever currently focuses on a small, explicit responsibility:
-
-- Generic base retriever interface
-- Jev evidence judgment
-- Adaptive stopping
-- Evidence accumulation
-- Document deduplication
-- Increasing retrieval depth across iterations
-- Retrieval budget / hard upper limit
-- Token telemetry
-- Optional cost telemetry
-- Backend-agnostic design
-- No required vector database
-- No required embedding model
-- No required retrieval framework
-
-The controller intentionally keeps retrieval simple: the original query is
-used for repeated retrieval passes rather than automatically rewriting or
-diversifying the query.
-
-## Requirements
-
-- Python 3.10+
-- `requests`
-
-Install dependencies with:
-
-```bash
-pip install -r requirements.txt
-```
-
-## Development
-
-Clone the repository and install the package in editable mode:
-
-```bash
-pip install -e .
-```
-
-Run the test suite:
-
-```bash
-python -m pytest
-```
-
-Build the package:
-
-```bash
-python -m build
-```
-
-Validate the distributions:
-
-```bash
-twine check dist/*
-```
-
-## Testing
-
-The test suite uses deterministic fake retrievers and fake Jev clients for
-core controller and retrieval-loop behavior.
-
-This keeps the unit tests independent of live API calls.
-
-The tests cover behavior including:
-
-- stopping when evidence is sufficient
-- retrieving again when evidence is insufficient
-- stopping on substantial redundancy
-- respecting the maximum retrieval limit
-- preserving the original query
-- accumulating evidence
-- deduplicating documents
-- rejecting invalid configuration
-- rejecting empty queries
-
-## Project Structure
+## Package Architecture
 
 ```text
 jevretrieve/
-├── src/
-│   └── jevretrieve/
-│       ├── __init__.py
-│       ├── client.py
-│       ├── controller.py
-│       ├── evaluator.py
-│       ├── models.py
-│       └── retriever.py
-│
-├── tests/
-│   ├── test_models.py
-│   └── test_retriever.py
-│
-├── examples/
-│   └── basic.py
-│
-├── README.md
-├── requirements.txt
-└── pyproject.toml
+├── __init__.py
+├── client.py
+├── controller.py
+├── evaluator.py
+├── models.py
+└── retriever.py
 ```
 
-## Design Principle
+### Main Components
 
-The central design principle is:
+**`BaseRetriever`** — Minimal interface expected from an existing retriever.
 
-> Your retriever finds evidence. Jev decides when there is enough evidence.
+**`JevClient`** — Handles communication with the TypeSafe Jev System One API.
 
-This keeps JevRetriever independent from the underlying search technology
-while providing an adaptive retrieval loop around existing retrieval
-systems.
+**`EvidenceEvaluator`** — Sends the query and accumulated evidence to Jev and converts the response into an `EvidenceAssessment`.
 
-## Status
+**`RetrievalController`** — Uses the Jev assessment to choose `STOP` or `RETRIEVE_MORE`.
 
-JevRetriever is an early-stage package focused on the core adaptive evidence
-retrieval loop.
+**`JevRetriever`** — Coordinates the complete adaptive retrieval loop.
 
-The API and behavior may evolve as the package develops.
+**Models** — `RetrievedDocument`, `EvidenceAssessment`, `ControllerDecision`, `RetrievalAction`, and `RetrievalResult`.
+
+## Development
+
+```bash
+git clone https://github.com/Aditya-on/JevRetriever.git
+cd JevRetriever
+pip install -e .
+pytest
+```
+
+## Version
+
+Current release:
+
+```text
+0.1.3
+```
+
+## Project Status
+
+JevRetriever is an early public release focused on the core adaptive evidence-retrieval abstraction.
+
+Current capabilities include:
+
+- retriever-agnostic interface;
+- Jev-based evidence evaluation;
+- adaptive retrieval control;
+- evidence accumulation and document deduplication;
+- configurable retrieval limits and thresholds;
+- token-usage tracking;
+- unit tests;
+- PyPI distribution;
+- benchmark evaluation across multiple retrieval strategies.
 
 ## License
 
-MIT
+MIT License.

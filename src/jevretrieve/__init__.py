@@ -1,4 +1,5 @@
-"""Public package API for JevRetriever."""
+
+"""Public package interface for JevRetriever."""
 
 from .models import (
     ControllerDecision,
@@ -8,6 +9,8 @@ from .models import (
     RetrievalResult,
 )
 from .retriever import BaseRetriever, JevRetriever
+
+__version__ = "0.1.3"
 
 __all__ = [
     "BaseRetriever",
@@ -19,4 +22,3 @@ __all__ = [
     "RetrievalResult",
 ]
 
-__version__ = "0.1.2"
