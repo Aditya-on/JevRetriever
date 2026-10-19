@@ -285,6 +285,98 @@ Therefore, these experiments primarily evaluate **adaptive selection from a fixe
 
 The supporting-recall metric used in these experiments is **paragraph-title recall**, not sentence-level supporting-fact recall.
 
+## Benchmark Metric Definitions and Calculations
+
+The benchmark reports three complementary metrics. They describe different aspects of the system and should not be treated as interchangeable.
+
+### 1. Answer Accuracy
+
+**What it measures:** The percentage of benchmark questions for which the system's generated answer matches the expected answer under the benchmark's answer-evaluation method.
+
+**Calculation:**
+
+```text
+Answer Accuracy (%) =
+    (Number of questions answered correctly
+     / Total number of evaluated questions) × 100
+```
+
+For a 50-question benchmark, if 24 answers are marked correct:
+
+```text
+Answer Accuracy = (24 / 50) × 100 = 48%
+```
+
+**What it means:** Higher accuracy means the system answered more questions correctly. Comparing `Baseline` with `+ Jev` shows whether Jev-guided retrieval was associated with improved answer accuracy in this experiment.
+
+**How to read the change:** `+8.00 pp` means an increase of 8 percentage points, such as 40% to 48%. It does not mean an 8% relative increase.
+
+### 2. Supporting-Document Recall
+
+**What it measures:** The proportion of ground-truth supporting paragraphs that were retrieved. In this benchmark, the metric uses supporting paragraph titles as the reference; it is not sentence-level supporting-fact recall.
+
+**Per-question calculation:**
+
+```text
+Supporting-Document Recall =
+    Number of ground-truth supporting paragraph titles retrieved
+    / Total number of ground-truth supporting paragraph titles
+```
+
+To express it as a percentage, multiply the result by 100.
+
+For example, if a question has 3 ground-truth supporting paragraphs and the retriever finds 2 of them:
+
+```text
+Supporting-Document Recall = (2 / 3) × 100 = 66.67%
+```
+
+**How to interpret the benchmark average:** The table reports benchmark percentages. The exact aggregation method (for example, averaging per-question recall versus pooling counts across questions) depends on the evaluation code; it cannot be determined from the table alone.
+
+**What it means:** Higher recall means the retriever found a larger proportion of the identified supporting paragraphs. It does not guarantee that the final answer is correct, nor does it measure whether every supporting sentence was retrieved.
+
+### 3. Retrieval Expansion
+
+**What it measures:** How the average number of returned documents changes when Jev-guided adaptive retrieval is enabled. The table also reports the number of base-retriever calls and Jev evaluation calls.
+
+**Calculation of average documents:**
+
+```text
+Average Documents =
+    Total number of documents counted across evaluated questions
+    / Number of evaluated questions
+```
+
+The exact document-counting and aggregation details should follow the benchmark evaluation code.
+
+**Calculation of additional average documents:**
+
+```text
+Additional Average Documents =
+    Average Docs (+ Jev) - Average Docs (Baseline)
+```
+
+**Calculation of relative expansion:**
+
+```text
+Relative Expansion (%) =
+    ((Average Docs (+ Jev) - Average Docs (Baseline))
+     / Average Docs (Baseline)) × 100
+```
+
+For example, for MMR:
+
+```text
+Additional Average Documents = 6.34 - 4.94 = 1.40
+
+Relative Expansion = ((6.34 - 4.94) / 4.94) × 100
+                   ≈ 28.34%
+```
+
+**What it means:** MMR returned an average of 1.40 more documents with Jev enabled, an increase of approximately 28.34% relative to its baseline average. More retrieved documents indicate retrieval expansion, not necessarily better evidence; Supporting-Document Recall and Answer Accuracy help assess whether that expansion was useful.
+
+**Retrieval calls and Jev calls:** These are call counts reported by the benchmark. A retrieval call is a call to the base retriever; a Jev call is an evaluation request to Jev. Equal totals in the table do not, by themselves, establish the exact per-question sequence or number of iterations.
+
 ## Why Use JevRetriever?
 
 A conventional RAG pipeline often uses:
